@@ -13,7 +13,6 @@ jobs:
     runs-on: macos-26
 
     env:
-      DEVELOPER_DIR: /Applications/Xcode-latest.app
       REPO_URL: https://github.com/ml-explore/mlx-swift-examples.git
       REPO_DIR: mlx-swift-examples
 
@@ -60,11 +59,12 @@ jobs:
 
           cd "$REPO_DIR"
 
-          echo "DEVELOPER_DIR=${DEVELOPER_DIR}"
-
-          echo ""
           echo "xcode-select:"
           xcode-select -p
+
+          echo ""
+          echo "Installed Xcode apps:"
+          ls -d /Applications/Xcode*.app || true
 
           echo ""
           echo "Xcode:"
