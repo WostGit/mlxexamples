@@ -1,40 +1,48 @@
 name: Build and Test LLM Examples
 
 on:
-  pull_request:
+  push:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   lint:
-    if: github.repository == 'ml-explore/mlx-swift-examples'
     runs-on: ubuntu-22.04
     container:
       image: swift:6.2-rhel-ubi9
 
-    steps:
-      - name: Checkout mlx-swift-examples PR revision
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-          fetch-depth: 0
+    env:
+      REPO_URL: https://github.com/ml-explore/mlx-swift-examples.git
+      REPO_DIR: mlx-swift-examples
 
-      - name: Print checked-out repository details
+    steps:
+      - name: Clone original mlx-swift-examples repository
         shell: sh
         run: |
           set -eux
 
-          echo "Repository: $GITHUB_REPOSITORY"
-          echo "Workspace: $GITHUB_WORKSPACE"
-          echo "Commit:"
+          git clone \
+            --recursive \
+            "$REPO_URL" \
+            "$REPO_DIR"
+
+          cd "$REPO_DIR"
+
+          echo "Cloned repository:"
+          git remote -v
+
+          echo "Current commit:"
           git rev-parse HEAD
 
-          echo "Branch/ref:"
+          echo "Current branch:"
           git branch --show-current || true
+
+          echo "Repository status:"
           git status --short
 
-          echo "Submodules:"
+          echo "Submodule status:"
           git submodule status --recursive || true
 
       - name: Setup uv
@@ -72,7 +80,7 @@ jobs:
           path: /tmp/swift-format/.build
           key: ${{ runner.os }}-swift-format-build-${{ steps.swift-format.outputs.SWIFT_FORMAT_VERSION }}
 
-      - name: Clone and build swift-format
+      - name: Clone swift-format
         if: steps.cache-swift-format.outputs.cache-hit != 'true'
         shell: sh
         run: |
@@ -85,7 +93,13 @@ jobs:
             --depth 1 \
             https://github.com/swiftlang/swift-format.git
 
-          cd swift-format
+      - name: Build swift-format
+        if: steps.cache-swift-format.outputs.cache-hit != 'true'
+        shell: sh
+        run: |
+          set -eux
+
+          cd /tmp/swift-format
           swift build -c release
 
       - name: Link swift-format to /usr/local/bin
@@ -101,17 +115,19 @@ jobs:
           ln -sf "$SWIFT_FORMAT_BIN" /usr/local/bin/swift-format
           swift-format --version || true
 
-      - name: Configure safe directory for git
+      - name: Configure cloned repository as safe git directory
         shell: sh
         run: |
           set -eux
 
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/$REPO_DIR"
 
       - name: Run style checks
         shell: sh
         run: |
           set -eux
+
+          cd "$REPO_DIR"
 
           pre-commit run --all || (
             echo ""
@@ -128,31 +144,39 @@ jobs:
   mac_llm_build_and_test:
     name: Build and Test LLM Examples
     needs: lint
-    if: github.repository == 'ml-explore/mlx-swift-examples'
     runs-on: [self-hosted, macos]
 
     env:
       DEVELOPER_DIR: /Applications/Xcode-latest.app
+      REPO_URL: https://github.com/ml-explore/mlx-swift-examples.git
+      REPO_DIR: mlx-swift-examples
 
     steps:
-      - name: Checkout mlx-swift-examples PR revision
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Print checked-out repository details
+      - name: Clone original mlx-swift-examples repository
         shell: bash
         run: |
           set -euxo pipefail
 
-          echo "Repository: ${GITHUB_REPOSITORY}"
-          echo "Workspace: ${GITHUB_WORKSPACE}"
-          echo "Commit:"
+          git clone \
+            --recursive \
+            "$REPO_URL" \
+            "$REPO_DIR"
+
+          cd "$REPO_DIR"
+
+          echo "Cloned repository:"
+          git remote -v
+
+          echo ""
+          echo "Current commit:"
           git rev-parse HEAD
 
           echo ""
-          echo "Git status:"
+          echo "Current branch:"
+          git branch --show-current || true
+
+          echo ""
+          echo "Repository status:"
           git status --short
 
           echo ""
@@ -167,6 +191,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
+          cd "$REPO_DIR"
 
           echo "DEVELOPER_DIR=${DEVELOPER_DIR}"
 
@@ -195,12 +221,16 @@ jobs:
         run: |
           set -euxo pipefail
 
+          cd "$REPO_DIR"
+
           xcodebuild -showComponent MetalToolchain
 
       - name: Clean Xcode and package resolution state
         shell: bash
         run: |
           set -euxo pipefail
+
+          cd "$REPO_DIR"
 
           echo "Removing DerivedData..."
           rm -rf ~/Library/Developer/Xcode/DerivedData/*
@@ -212,6 +242,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
+          cd "$REPO_DIR"
 
           echo "LLM applications:"
           find Applications \
@@ -242,12 +274,16 @@ jobs:
         run: |
           set -euxo pipefail
 
+          cd "$REPO_DIR"
+
           xcodebuild -list
 
       - name: Build package for testing
         shell: bash
         run: |
           set -euxo pipefail
+
+          cd "$REPO_DIR"
 
           xcodebuild \
             build-for-testing \
@@ -260,6 +296,8 @@ jobs:
         run: |
           set -euxo pipefail
 
+          cd "$REPO_DIR"
+
           xcodebuild \
             -scheme llm-tool \
             -destination 'platform=macOS' \
@@ -269,6 +307,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
+          cd "$REPO_DIR"
 
           xcodebuild \
             -scheme LLMBasic \
@@ -280,6 +320,8 @@ jobs:
         run: |
           set -euxo pipefail
 
+          cd "$REPO_DIR"
+
           xcodebuild \
             -scheme LLMEval \
             -destination 'platform=macOS' \
@@ -289,6 +331,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
+          cd "$REPO_DIR"
 
           xcodebuild \
             -scheme MLXChatExample \
@@ -300,6 +344,8 @@ jobs:
         run: |
           set -euxo pipefail
 
+          cd "$REPO_DIR"
+
           xcodebuild \
             -scheme LoRATrainingExample \
             -destination 'platform=macOS' \
@@ -310,7 +356,8 @@ jobs:
         run: |
           set -euxo pipefail
 
-          echo "Using mlx-run because this repository documents it as the wrapper for command-line tools."
+          cd "$REPO_DIR"
+
           chmod +x ./mlx-run
 
           ./mlx-run llm-tool --help || ./mlx-run llm-tool help || true
@@ -321,12 +368,18 @@ jobs:
         run: |
           set +e
 
+          cd "$REPO_DIR"
+
           echo "Git status:"
           git status --short
 
           echo ""
           echo "Current commit:"
           git rev-parse HEAD
+
+          echo ""
+          echo "Remote:"
+          git remote -v
 
           echo ""
           echo "Available schemes:"
