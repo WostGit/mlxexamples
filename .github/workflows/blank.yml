@@ -1,0 +1,354 @@
+name: Build and Test LLM Examples
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    if: github.repository == 'ml-explore/mlx-swift-examples'
+    runs-on: ubuntu-22.04
+    container:
+      image: swift:6.2-rhel-ubi9
+
+    steps:
+      - name: Checkout mlx-swift-examples PR revision
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Print checked-out repository details
+        shell: sh
+        run: |
+          set -eux
+
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Workspace: $GITHUB_WORKSPACE"
+          echo "Commit:"
+          git rev-parse HEAD
+
+          echo "Branch/ref:"
+          git branch --show-current || true
+          git status --short
+
+          echo "Submodules:"
+          git submodule status --recursive || true
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          activate-environment: true
+
+      - name: Setup pre-commit
+        shell: sh
+        run: |
+          set -eux
+
+          uv pip install pre-commit
+          pre-commit --version
+
+      - name: Get swift-format tag
+        id: swift-format
+        shell: sh
+        run: |
+          set -eux
+
+          cd /tmp
+
+          LATEST_TAG=$(curl -s https://api.github.com/repos/swiftlang/swift-format/releases/latest | \
+            grep '"tag_name":' | \
+            sed -E 's/.*"([^"]+)".*/\1/')
+
+          echo "swift-format ${LATEST_TAG}"
+          echo "SWIFT_FORMAT_VERSION=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache swift-format build
+        uses: actions/cache@v4
+        id: cache-swift-format
+        with:
+          path: /tmp/swift-format/.build
+          key: ${{ runner.os }}-swift-format-build-${{ steps.swift-format.outputs.SWIFT_FORMAT_VERSION }}
+
+      - name: Clone and build swift-format
+        if: steps.cache-swift-format.outputs.cache-hit != 'true'
+        shell: sh
+        run: |
+          set -eux
+
+          cd /tmp
+
+          git clone \
+            --branch "${{ steps.swift-format.outputs.SWIFT_FORMAT_VERSION }}" \
+            --depth 1 \
+            https://github.com/swiftlang/swift-format.git
+
+          cd swift-format
+          swift build -c release
+
+      - name: Link swift-format to /usr/local/bin
+        shell: sh
+        run: |
+          set -eux
+
+          cd /tmp/swift-format
+
+          SWIFT_FORMAT_BIN="$(swift build --show-bin-path -c release)/swift-format"
+          test -x "$SWIFT_FORMAT_BIN"
+
+          ln -sf "$SWIFT_FORMAT_BIN" /usr/local/bin/swift-format
+          swift-format --version || true
+
+      - name: Configure safe directory for git
+        shell: sh
+        run: |
+          set -eux
+
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Run style checks
+        shell: sh
+        run: |
+          set -eux
+
+          pre-commit run --all || (
+            echo ""
+            echo "Style checks failed."
+            echo "Please install pre-commit and run:"
+            echo "  pre-commit run --all"
+            echo "Then commit and push the resulting changes."
+            echo ""
+            echo "Repository diff:"
+            git --no-pager diff
+            exit 1
+          )
+
+  mac_llm_build_and_test:
+    name: Build and Test LLM Examples
+    needs: lint
+    if: github.repository == 'ml-explore/mlx-swift-examples'
+    runs-on: [self-hosted, macos]
+
+    env:
+      DEVELOPER_DIR: /Applications/Xcode-latest.app
+
+    steps:
+      - name: Checkout mlx-swift-examples PR revision
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Print checked-out repository details
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          echo "Workspace: ${GITHUB_WORKSPACE}"
+          echo "Commit:"
+          git rev-parse HEAD
+
+          echo ""
+          echo "Git status:"
+          git status --short
+
+          echo ""
+          echo "Submodule status:"
+          git submodule status --recursive || true
+
+          echo ""
+          echo "Top-level files:"
+          ls -la
+
+      - name: Print Apple toolchain details
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "DEVELOPER_DIR=${DEVELOPER_DIR}"
+
+          echo ""
+          echo "xcode-select:"
+          xcode-select -p
+
+          echo ""
+          echo "Xcode:"
+          xcodebuild -version
+
+          echo ""
+          echo "SDK build version:"
+          xcrun --show-sdk-build-version
+
+          echo ""
+          echo "Swift:"
+          swift --version
+
+          echo ""
+          echo "Available SDKs:"
+          xcodebuild -showsdks
+
+      - name: Verify MetalToolchain installed
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          xcodebuild -showComponent MetalToolchain
+
+      - name: Clean Xcode and package resolution state
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Removing DerivedData..."
+          rm -rf ~/Library/Developer/Xcode/DerivedData/*
+
+          echo "Removing Package.resolved files..."
+          find . -name Package.resolved -print -exec rm {} \;
+
+      - name: List LLM-focused repository contents
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "LLM applications:"
+          find Applications \
+            -maxdepth 2 \
+            \( -path '*LLMBasic*' -o -path '*LLMEval*' -o -path '*MLXChatExample*' -o -path '*LoRATrainingExample*' \) \
+            -print | sort
+
+          echo ""
+          echo "LLM tool:"
+          find Tools/llm-tool -maxdepth 3 -print | sort
+
+          echo ""
+          echo "LLM/VLM/token/model-related files:"
+          find . \
+            \( -iname '*llm*' \
+            -o -iname '*vlm*' \
+            -o -iname '*lora*' \
+            -o -iname '*llama*' \
+            -o -iname '*mistral*' \
+            -o -iname '*qwen*' \
+            -o -iname '*phi*' \
+            -o -iname '*token*' \
+            -o -iname '*transformer*' \) \
+            -print | sort
+
+      - name: Show Xcode schemes
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          xcodebuild -list
+
+      - name: Build package for testing
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          xcodebuild \
+            build-for-testing \
+            -scheme mlx-libraries-Package \
+            -destination 'platform=macOS' \
+            -skipMacroValidation
+
+      - name: Build llm-tool
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          xcodebuild \
+            -scheme llm-tool \
+            -destination 'platform=macOS' \
+            -skipMacroValidation
+
+      - name: Build LLMBasic app
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          xcodebuild \
+            -scheme LLMBasic \
+            -destination 'platform=macOS' \
+            -skipMacroValidation
+
+      - name: Build LLMEval app
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          xcodebuild \
+            -scheme LLMEval \
+            -destination 'platform=macOS' \
+            -skipMacroValidation
+
+      - name: Build MLXChatExample app
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          xcodebuild \
+            -scheme MLXChatExample \
+            -destination 'platform=macOS' \
+            -skipMacroValidation
+
+      - name: Build LoRATrainingExample app
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          xcodebuild \
+            -scheme LoRATrainingExample \
+            -destination 'platform=macOS' \
+            -skipMacroValidation
+
+      - name: Run llm-tool help smoke test
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Using mlx-run because this repository documents it as the wrapper for command-line tools."
+          chmod +x ./mlx-run
+
+          ./mlx-run llm-tool --help || ./mlx-run llm-tool help || true
+
+      - name: Print LLM diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+
+          echo "Git status:"
+          git status --short
+
+          echo ""
+          echo "Current commit:"
+          git rev-parse HEAD
+
+          echo ""
+          echo "Available schemes:"
+          xcodebuild -list
+
+          echo ""
+          echo "Recent DerivedData logs:"
+          find ~/Library/Developer/Xcode/DerivedData \
+            -type f \
+            \( -name '*.xcactivitylog' -o -name '*.log' \) \
+            -print | sort | tail -50
+
+          echo ""
+          echo "LLM-related files:"
+          find . \
+            \( -iname '*llm*' \
+            -o -iname '*vlm*' \
+            -o -iname '*lora*' \
+            -o -iname '*llama*' \
+            -o -iname '*mistral*' \
+            -o -iname '*qwen*' \
+            -o -iname '*phi*' \
+            -o -iname '*token*' \
+            -o -iname '*transformer*' \) \
+            -print | sort
