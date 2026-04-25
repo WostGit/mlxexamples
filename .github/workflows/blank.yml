@@ -144,7 +144,7 @@ jobs:
   mac_llm_build_and_test:
     name: Build and Test LLM Examples
     needs: lint
-    runs-on: [self-hosted, macos]
+    runs-on: [macos]
 
     env:
       DEVELOPER_DIR: /Applications/Xcode-latest.app
