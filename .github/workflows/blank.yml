@@ -15,6 +15,7 @@ jobs:
     env:
       REPO_URL: https://github.com/ml-explore/mlx-swift-examples.git
       REPO_DIR: mlx-swift-examples
+      XCODE_DESTINATION: platform=macOS,arch=arm64
 
     steps:
       - name: Clone original mlx-swift-examples repository
@@ -82,6 +83,10 @@ jobs:
           echo "Available SDKs:"
           xcodebuild -showsdks
 
+          echo ""
+          echo "Destination:"
+          echo "$XCODE_DESTINATION"
+
       - name: Verify MetalToolchain installed
         shell: bash
         run: |
@@ -103,6 +108,36 @@ jobs:
 
           echo "Removing Package.resolved files..."
           find . -name Package.resolved -print -exec rm {} \;
+
+      - name: Resolve Swift package dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$REPO_DIR"
+
+          xcodebuild \
+            -resolvePackageDependencies \
+            -scheme mlx-libraries-Package \
+            -destination "$XCODE_DESTINATION"
+
+      - name: Inspect Swift package
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$REPO_DIR"
+
+          echo "Swift package dump:"
+          swift package dump-package
+
+          echo ""
+          echo "Swift package products:"
+          swift package describe --type text || true
+
+          echo ""
+          echo "Swift package tests:"
+          swift test list || true
 
       - name: List LLM-focused repository contents
         shell: bash
@@ -154,7 +189,20 @@ jobs:
           xcodebuild \
             build-for-testing \
             -scheme mlx-libraries-Package \
-            -destination 'platform=macOS' \
+            -destination "$XCODE_DESTINATION" \
+            -skipMacroValidation
+
+      - name: Run package tests with Xcode
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$REPO_DIR"
+
+          xcodebuild \
+            test \
+            -scheme mlx-libraries-Package \
+            -destination "$XCODE_DESTINATION" \
             -skipMacroValidation
 
       - name: Build llm-tool
@@ -166,7 +214,7 @@ jobs:
 
           xcodebuild \
             -scheme llm-tool \
-            -destination 'platform=macOS' \
+            -destination "$XCODE_DESTINATION" \
             -skipMacroValidation
 
       - name: Build LLMBasic app
@@ -178,7 +226,7 @@ jobs:
 
           xcodebuild \
             -scheme LLMBasic \
-            -destination 'platform=macOS' \
+            -destination "$XCODE_DESTINATION" \
             -skipMacroValidation
 
       - name: Build LLMEval app
@@ -190,7 +238,7 @@ jobs:
 
           xcodebuild \
             -scheme LLMEval \
-            -destination 'platform=macOS' \
+            -destination "$XCODE_DESTINATION" \
             -skipMacroValidation
 
       - name: Build MLXChatExample app
@@ -202,7 +250,7 @@ jobs:
 
           xcodebuild \
             -scheme MLXChatExample \
-            -destination 'platform=macOS' \
+            -destination "$XCODE_DESTINATION" \
             -skipMacroValidation
 
       - name: Build LoRATrainingExample app
@@ -214,10 +262,34 @@ jobs:
 
           xcodebuild \
             -scheme LoRATrainingExample \
-            -destination 'platform=macOS' \
+            -destination "$XCODE_DESTINATION" \
             -skipMacroValidation
 
-      - name: Run llm-tool help smoke test
+      - name: Build LLM schemes for testing
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$REPO_DIR"
+
+          for scheme in \
+            llm-tool \
+            LLMBasic \
+            LLMEval \
+            MLXChatExample \
+            LoRATrainingExample
+          do
+            echo ""
+            echo "Build for testing: $scheme"
+
+            xcodebuild \
+              build-for-testing \
+              -scheme "$scheme" \
+              -destination "$XCODE_DESTINATION" \
+              -skipMacroValidation
+          done
+
+      - name: Run llm-tool command smoke tests
         shell: bash
         run: |
           set -euxo pipefail
@@ -226,7 +298,56 @@ jobs:
 
           chmod +x ./mlx-run
 
-          ./mlx-run llm-tool --help || ./mlx-run llm-tool help || true
+          echo "Main help:"
+          ./mlx-run llm-tool --help
+
+          echo ""
+          echo "Eval help:"
+          ./mlx-run llm-tool help eval
+
+          echo ""
+          echo "Chat help:"
+          ./mlx-run llm-tool help chat
+
+          echo ""
+          echo "LoRA help:"
+          ./mlx-run llm-tool help lora
+
+          echo ""
+          echo "List help:"
+          ./mlx-run llm-tool help list
+
+          echo ""
+          echo "Registered model list:"
+          ./mlx-run llm-tool list
+
+      - name: Verify built products exist
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$REPO_DIR"
+
+          echo "DerivedData build products:"
+          find ~/Library/Developer/Xcode/DerivedData \
+            -path '*/Build/Products/*' \
+            \( -name 'llm-tool' \
+            -o -name 'LLMBasic.app' \
+            -o -name 'LLMEval.app' \
+            -o -name 'MLXChatExample.app' \
+            -o -name 'LoRATrainingExample.app' \) \
+            -print | sort
+
+          echo ""
+          echo "Checking at least one llm-tool binary exists..."
+          test -n "$(find ~/Library/Developer/Xcode/DerivedData -name 'llm-tool' -type f -perm +111 -print -quit)"
+
+          echo ""
+          echo "Checking app bundles exist..."
+          test -n "$(find ~/Library/Developer/Xcode/DerivedData -name 'LLMBasic.app' -type d -print -quit)"
+          test -n "$(find ~/Library/Developer/Xcode/DerivedData -name 'LLMEval.app' -type d -print -quit)"
+          test -n "$(find ~/Library/Developer/Xcode/DerivedData -name 'MLXChatExample.app' -type d -print -quit)"
+          test -n "$(find ~/Library/Developer/Xcode/DerivedData -name 'LoRATrainingExample.app' -type d -print -quit)"
 
       - name: Print LLM diagnostics on failure
         if: failure()
@@ -252,11 +373,21 @@ jobs:
           xcodebuild -list
 
           echo ""
+          echo "Swift package tests:"
+          swift test list
+
+          echo ""
           echo "Recent DerivedData logs:"
           find ~/Library/Developer/Xcode/DerivedData \
             -type f \
             \( -name '*.xcactivitylog' -o -name '*.log' \) \
             -print | sort | tail -50
+
+          echo ""
+          echo "Built products:"
+          find ~/Library/Developer/Xcode/DerivedData \
+            -path '*/Build/Products/*' \
+            -print | sort | tail -200
 
           echo ""
           echo "LLM-related files:"
